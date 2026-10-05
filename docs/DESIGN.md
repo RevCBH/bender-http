@@ -418,10 +418,10 @@ message length passes, one less is TooLarge.
 
 ## Proof status
 
-The gate, run on the build box (checking takes well under a minute):
+The gate (checking takes about a minute):
 
-    scripts/box 'bend PROOF.bend'             # ALL PROOFS CHECK once every law is proven
-    scripts/box 'bend PROOF.bend --verdict'   # the same, rechecked by the BendTT kernel
+    bend PROOF.bend             # ALL PROOFS CHECK once every law is proven
+    bend PROOF.bend --verdict   # the same, rechecked by the BendTT kernel (Lean 4.34.0)
 
 `bend PROOF.bend` prints ALL PROOFS CHECK; `bend PROOF.bend --verdict` also prints ALL PROOFS CHECK (the BendTT kernel rechecks every law; about 50 s).
 
@@ -461,6 +461,6 @@ a 200000-byte chunk decodes on both lanes in an end-to-end test.
   `bend tests/x.bend` printing ALL PROOFS CHECK is a pass. Good for every pure module.
 - Runtime tests: `tests/*_run.bend` with `main -> IO(Unit)` printing `PASS name` /
   `FAIL name`, run on both lanes: `bend f.bend` (JS) and `bend f.bend -o f && ./f` (C).
-- Live tests run on the build box (`scripts/box`): local Python servers that send
+- Live tests (`tests/*_live.sh`) start local Python servers that send
   chunked bodies, split writes, 1xx responses, binary bodies, slow responses, and
   public endpoints (example.com, httpbin.org, badssl.com).

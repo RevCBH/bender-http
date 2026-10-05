@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      public:
+        description: Also run the tests that use public internet endpoints
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Bend, Lean, and the BendTT kernel Bend builds under ~/.bend on first --verdict.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bend-toolchain
+            ~/.bend/bendtt
+          key: bend-2.0.32-lean-4.34.0-${{ hashFiles('scripts/ci-setup.sh') }}
+      - name: Toolchain
+        run: scripts/ci-setup.sh
+      - name: Gate (proofs, checks, tests on both lanes, local live tests)
+        run: scripts/ci.sh ${{ inputs.public && '--public' || '' }}

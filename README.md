@@ -62,11 +62,12 @@ there: build big values with tail-recursive loops, or use the C lane.
 `docs/DESIGN.md` holds the design and laws 1-18 about the pure codec (URLs,
 headers, request encoding, response decoding). `LAWS.bend` states them as 21
 laws (plus a corollary of law 15 and concrete URL cases); `proofs/*.bend` prove
-them and `PROOF.bend` imports every proof file. All 21 are proven. The gate, on
-the build box:
+them and `PROOF.bend` imports every proof file. All 21 are proven. The gate:
 
-    scripts/box 'bend PROOF.bend'             # ALL PROOFS CHECK
-    scripts/box 'bend PROOF.bend --verdict'   # ALL PROOFS CHECK (BendTT kernel)
+    bend PROOF.bend             # ALL PROOFS CHECK
+    bend PROOF.bend --verdict   # ALL PROOFS CHECK (BendTT kernel; needs Lean 4.34.0)
+
+CI runs both on every push to `main` (`.github/workflows/ci.yml`).
 
 Law 11 (a chunked response decodes to itself) is stated for chunk sizes up to
 65535: a bound on what is proven, not on the client, which reads any chunk
@@ -99,8 +100,8 @@ end). See "Proof status" in `docs/DESIGN.md`.
   fallback name, as curl and Python do.
 - **Proofs** cover the pure codec only. DNS, TCP, TLS and the read loops are
   foreign or IO code and are tested, not proven.
-- **Platforms.** Built and tested on Linux x86_64 (locally and on
-  rust-build-box) with Bend 2.0.32. The macOS paths in `tls.c` / `tls.js`
+- **Platforms.** Built and tested on Linux x86_64 (Arch locally, Ubuntu 24.04 in
+  CI) with Bend 2.0.32. The macOS paths in `tls.c` / `tls.js`
   are written but untested. The C side of the foreign effects (`dns.c`,
   `tls.c`) uses Bend runtime internals with no ABI promise: rebuild and rerun
   the tests after any compiler update.
@@ -111,7 +112,8 @@ MIT; see `LICENSE`.
 
 ## Tests
 
-Run everything on the build box (`scripts/box '<cmd>'`), on both lanes:
+Run them on both lanes (`bend f.bend` is the JS lane, `bend f.bend -o f && ./f`
+the native C lane):
 `tests/*_test.bend` are checker-evaluated (`ALL PROOFS CHECK`),
 `tests/*_run.bend` print `PASS` / `FAIL` lines, and the `*_live.sh` scripts
 start local servers or use public endpoints.
