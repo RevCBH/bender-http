@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Sync this project to rust-build-box and run a command there, in the synced copy.
+#   scripts/box bend PROOF.bend --verdict
+#   scripts/box 'bend tests/url_test.bend && bend examples/fetch.bend -- http://example.com/'
+# Probe files belong in .scratch/<name>/ (git-ignored, synced). Write build outputs
+# on the box under /tmp/<name>/, never into the synced tree: --delete would drop them.
+# The box's bend wrapper pins Bend 2.0.32 and points BENDTT at a prebuilt
+# BendTT kernel, so --verdict works there. RBB_SSH_CONFIG overrides the ssh config.
+set -euo pipefail
+cfg="${RBB_SSH_CONFIG:-$HOME/.config/rust-build-box/ssh_config}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+remote_dir="work/$(basename "$root")"
+ssh -F "$cfg" rust-build-box "mkdir -p '$remote_dir'"
+rsync -a --delete -e "ssh -F $cfg" \
+  --exclude .git --exclude '*.c.out' --exclude 'build/' \
+  "$root/" "rust-build-box:$remote_dir/"
+(( $# )) || exit 0
+ssh -F "$cfg" rust-build-box "cd '$remote_dir' && bash -lc $(printf '%q' "$*")"
