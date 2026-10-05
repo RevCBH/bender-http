@@ -30,10 +30,13 @@ if [[ ! -x $TOOLS/lean-$LEAN_VERSION/bin/lean ]]; then
   tar --zstd -xf "$TOOLS/lean.tar.zst" -C "$TOOLS" && mv "$TOOLS/lean-$LEAN_VERSION-linux" "$TOOLS/lean-$LEAN_VERSION"
   rm -f "$TOOLS/lean.tar.zst"
 fi
-for dir in "$TOOLS/bend-$BEND_VERSION/bin" "$TOOLS/lean-$LEAN_VERSION/bin"; do
-  [[ -n ${GITHUB_PATH:-} ]] && echo "$dir" >> "$GITHUB_PATH"
-  export PATH="$dir:$PATH"
-done
+# Only these on PATH: Lean's bin/ also holds its own clang (no system
+# headers), which must not shadow the system clang that native builds use.
+mkdir -p "$TOOLS/bin"
+ln -sfn "$TOOLS/bend-$BEND_VERSION/bin/bend" "$TOOLS/bin/bend"
+for tool in lean lake leanc; do ln -sfn "$TOOLS/lean-$LEAN_VERSION/bin/$tool" "$TOOLS/bin/$tool"; done
+[[ -n ${GITHUB_PATH:-} ]] && echo "$TOOLS/bin" >> "$GITHUB_PATH"
+export PATH="$TOOLS/bin:$PATH"
 [[ -n ${GITHUB_ENV:-} ]] && echo 'BEND_NO_TELEMETRY=1' >> "$GITHUB_ENV"
 BEND_NO_TELEMETRY=1 bend version
 lean --version
