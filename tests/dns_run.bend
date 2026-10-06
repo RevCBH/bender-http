@@ -1,16 +1,12 @@
 import Base
-import ../src/dns.bend as D
+import ../main.bend as P
+import ../../dns/main.bend as D
 
-# Dns.lookup with no network: input checks and numeric hosts. A canonical
-# dotted quad answers itself; any other host the resolver would read as an
-# IPv4 address (inet_aton's octal, hex, short and bare-number forms) is
-# EINVAL (22) before any lookup; a trailing dot or a fifth part makes a name,
-# which goes to the resolver (and fails there, but not with EINVAL).
-#   bend tests/dns_run.bend
-#   bend tests/dns_run.bend -o x && ./x
+# Public native DNS lookup: literal and ambiguous-numeric handling, plus
+# localhost through the system hosts file. No public DNS server is needed.
 
 def R() -> Type:
-  Result<&1, &1, U32 & String, List<&2, String>>
+  Result<&2, &2, P.Http.Error(), List<&2, String>>
 
 type Want is Data:
   Code{code: U32}             # this failure
@@ -62,18 +58,30 @@ def want_ips(w: Want, +ips: List<&2, String>) -> Bool:
 
 def expect(name: String, w: Want, r: R) -> IO(Unit):
   match r:
-    case Fail{e}:
-      (c, m) = e
-      +k = c
+    case Fail{+e}:
+      +k = Maybe.default(&2, U32, P.Http.Error.code(e), 0)
+      m = P.Http.Error.show(e)
       verdict(name, want_code(w, k), "error " ++ U32.show(k) ++ ": " ++ m)
     case Done{ips}:
       +xs = ips
       verdict(name, want_ips(w, xs), String.join(xs, ", "))
 
 def check(name: String, host: String, w: Want) -> IO(Unit):
-  IO.bind(R, Unit, D.Dns.lookup(host), r => expect(name, w, r))
+  IO.bind(R, Unit, P.Http.lookup(host), r => expect(name, w, r))
+
+def single(r: Result<&2, &2, P.Http.Error(), String>) -> R:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{ip}:
+      Done{[ip]}
+
+def resolve(name: String, cfg: P.Http.Config(), host: String, w: Want) -> IO(Unit):
+  IO.bind(Result<&2, &2, P.Http.Error(), String>, Unit, P.Http.resolve(cfg, host), r => expect(name, w, single(r)))
 
 def main() -> IO(Unit):
+  +dns = D.Dns.with_hosts(D.Dns.default_config(), "127.0.0.2 custom.test\n127.0.0.3 custom.test\n")
+  +cfg = P.Http.with_dns(P.Http.default_config(), dns)
   do IO<Unit>:
     check("empty name", "", Code{22})
     check("name with NUL", "a\0b", Code{22})
@@ -83,6 +91,7 @@ def main() -> IO(Unit):
     check("short form 127.1", "127.1", Code{22})
     check("hex part 0x7f.1", "0x7f.1", Code{22})
     check("hex whole 0xffffffff", "0xffffffff", Code{22})
+    check("uppercase hex whole 0XFFFFFFFF", "0XFFFFFFFF", Code{22})
     check("octal 010.0.0.1 (would be 8.0.0.1)", "010.0.0.1", Code{22})
     check("octal 0177.0.0.1", "0177.0.0.1", Code{22})
     check("leading zero in the last part", "127.0.0.010", Code{22})
@@ -92,5 +101,10 @@ def main() -> IO(Unit):
     check("canonical 0.0.0.0 is itself", "0.0.0.0", Addrs{["0.0.0.0"]})
     check("canonical 255.255.255.255 is itself", "255.255.255.255", Addrs{["255.255.255.255"]})
     check("localhost", "localhost", Has{"127.0.0.1"})
-    check("trailing dot makes 127.1. a name", "127.1.", NotCode{22})
-    check("five parts make a name", "1.2.3.4.5", NotCode{22})
+    resolve("custom DNS hosts", cfg, "CUSTOM.TEST", Addrs{["127.0.0.2"]})
+    resolve("setters preserve custom DNS", P.Http.with_max_bytes(P.Http.with_timeout(cfg, 1000n), 100n),
+      "custom.test", Addrs{["127.0.0.2"]})
+    resolve("HTTP override takes precedence", P.Http.with_host(cfg, "custom.test", "127.0.0.4"),
+      "CUSTOM.TEST", Addrs{["127.0.0.4"]})
+    resolve("literal before HTTP overrides", P.Http.with_host(cfg, "127.0.0.5", "127.0.0.6"),
+      "127.0.0.5", Addrs{["127.0.0.5"]})

@@ -1,4 +1,5 @@
 import Base
+import ../dns/main.bend as DNS
 import ./src/bytes.bend as B
 import ./src/message.bend as M
 import ./src/headers.bend as H
@@ -21,15 +22,15 @@ import ./src/client.bend as C
 # Every request opens a fresh connection and sends `Connection: close`; the
 # response is buffered whole (up to a limit). HTTPS goes through OpenSSL 3,
 # loaded at run time. Redirects are not followed: `Http.redirect` gives the
-# next request and the caller decides. Names resolve through the OS resolver
-# (IPv4 only), after an optional hosts table in the config.
+# next request and the caller decides. Names resolve through bender-dns
+# (native IPv4 resolver), after an optional hosts table in the config.
 #
 # This file defines only `Http.*` wrappers over the modules in src/, plus the
 # ErrorKind / ParseErrorKind tags for matching on errors (imports are not
 # re-exported, so these are the whole public surface). The pure codec (URLs,
 # headers, request encoding, response decoding) is specified by laws 1-18
 # (docs/DESIGN.md), to be stated in LAWS.bend and proven in PROOF.bend; this
-# file and the IO entry points rely on foreign code (DNS, TLS), so checking
+# file and the IO entry points rely on foreign code (TLS), so checking
 # it reports those defs as unproven.
 #
 # Lanes: the native C lane (`bend f.bend -o f`) has no stack limit. The JS
@@ -331,7 +332,7 @@ def Http.Decoded.rest(d: M.Decoded) -> List<&2, U32>:
 #   BadUrl      the URL did not parse (or its host is an ambiguous number)
 #   BadRequest  the request is invalid (headers, method, a bad hosts entry)
 #   NoAddress   the name resolved to no IPv4 address
-#   Dns         the resolver failed (code: getaddrinfo's, as errno)
+#   Dns         the resolver failed (code: errno if available, otherwise 0)
 #   Connect     the TCP connect failed (code: errno, e.g. 111 refused)
 #   Io          a send or read failed (code: errno)
 #   Timeout     a blocking step passed the config's timeout_ms
@@ -391,7 +392,7 @@ def Http.Error.kind(e: M.Error) -> ErrorKind:
     case M.Parse{p}:
       Parse{}
 
-# The OS / OpenSSL error code of a Dns, Connect, Io or Tls error (errno
+# The resolver / OS / OpenSSL code of a Dns, Connect, Io or Tls error (errno
 # values, Linux numbering on Linux), else None.
 def Http.Error.code(e: M.Error) -> Maybe<&2, U32>:
   match e:
@@ -464,12 +465,19 @@ def Http.with_host(cfg: C.Config, name: String, ip: String) -> C.Config:
 # OpenSSL. 0: no limit. HTTPS timeouts cancel the step. The others cannot be
 # cancelled (Base has no way to abort a blocked effect): the request answers
 # Timeout at once, but over plain HTTP the stalled connect or read keeps its
-# socket open, and a stalled lookup its resolver thread, and either keeps
+# socket open, and a stalled DNS TCP step also keeps
 # the program from ending normally until the peer acts or the OS gives up
-# (an explicit exit such as IO.die still ends it at once). On the JS lane
-# the name lookup blocks the event loop, so its timeout cannot fire there.
+# (an explicit exit such as IO.die still ends it at once). DNS deadlines
+# work on both runtimes; resolver step timeouts remain independently active.
 def Http.with_timeout(cfg: C.Config, ms: Nat) -> C.Config:
   C.with_timeout(cfg, ms)
+
+# Use a bender-dns config (import ../dns/main.bend as D to construct it).
+# DNS step timeouts, nameservers, port, hosts and search settings are retained;
+# Http.with_timeout separately bounds the whole lookup. HTTP hosts overrides
+# and IPv4 literals take precedence. The default loads system files lazily.
+def Http.with_dns(cfg: C.Config, resolver: DNS.Dns.Config()) -> C.Config:
+  C.with_dns(cfg, resolver)
 
 # At most `n` bytes of response (status line, headers and body).
 def Http.with_max_bytes(cfg: C.Config, n: Nat) -> C.Config:
@@ -490,9 +498,10 @@ def Http.send(cfg: C.Config, req: M.Request) -> IO(Result<&2, &2, M.Error, M.Res
 def Http.fetch(cfg: C.Config, url: String) -> IO(Result<&2, &2, M.Error, M.Response>):
   C.fetch(cfg, url)
 
-# The host's IPv4 addresses from the OS resolver (no timeout of its own). A
-# canonical dotted quad answers itself; any other host the resolver would
-# read as a number ("127.1", "010.0.0.1") fails with a Dns error (EINVAL).
+# Native DNS IPv4 lookup using /etc/resolv.conf and /etc/hosts, including
+# search domains and CNAMEs. DNS step timeouts come from resolv.conf.
+# Canonical dotted quads answer themselves; ambiguous numeric hosts,
+# empty names and NULs fail with Dns code 22.
 def Http.lookup(host: String) -> IO(Result<&2, &2, M.Error, List<&2, String>>):
   C.lookup(host)
 

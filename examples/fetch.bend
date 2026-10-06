@@ -9,7 +9,8 @@ import ../main.bend as P
 # -d sends the text as the body (UTF-8) and makes the default method POST;
 # --max caps the response at N bytes (default 16 MiB); --timeout bounds each
 # blocking step: the name lookup, connect, send, each read (default 30000 ms;
-# 0: no limit; see Http.with_timeout: a timed-out plain-HTTP read or lookup
+# 0: no HTTP deadline (DNS retains its own step timeouts); see
+# Http.with_timeout: a timed-out plain-HTTP read or lookup
 # is not cancelled, so this example exits with IO.die on failure rather than
 # wait for it); --follow follows up to 10 redirects with Http.redirect. On
 # failure it prints why and exits with 1.

@@ -22,9 +22,19 @@ jobs:
   gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: http
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
+          path: http
+      - uses: actions/checkout@v4
+        with:
+          repository: RevCBH/bender-dns
+          ref: 6e69e403218ee5af53b38d65bb5acf94cc44f248
+          path: dns
           persist-credentials: false
       # Bend, Lean, and the BendTT kernel Bend builds under ~/.bend on first --verdict.
       - uses: actions/cache@v4
@@ -32,7 +42,7 @@ jobs:
           path: |
             ~/.cache/bend-toolchain
             ~/.bend/bendtt
-          key: bend-2.0.32-lean-4.34.0-${{ hashFiles('scripts/ci-setup.sh') }}
+          key: bend-2.0.32-lean-4.34.0-${{ hashFiles('http/scripts/ci-setup.sh') }}
       - name: Toolchain
         run: scripts/ci-setup.sh
       - name: Gate (proofs, checks, tests on both lanes, local live tests)

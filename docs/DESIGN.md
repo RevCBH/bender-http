@@ -35,7 +35,7 @@ redirects (`redirect` computes the next request; the caller loops).
 | `src/decode.bend` | `D` | the response decoder: a byte-at-a-time state machine |
 | `src/spec.bend` | `S` | pure helpers that exist only so laws can be stated: the response encoder; never imported by main.bend |
 | `src/spec_request.bend` | `SR` | the same for requests: a reader for what E emits |
-| `src/dns.bend` + `.c/.js` | | `Dns.lookup`: getaddrinfo (foreign) |
+| `src/dns.bend` | | adapter to sibling bender-dns native resolver |
 | `src/tls.bend` + `.c/.js` | | `Tls.open` / `Tls.recv` / `Tls.close` (and `Tls.exchange`): HTTPS over OpenSSL (foreign) |
 | `src/transport.bend` | `X` | IO: plain HTTP over Base TCP; HTTPS over Tls.open / recv / close |
 | `src/client.bend` | `C` | IO: Config, resolve, send, fetch; pure redirect |
@@ -256,13 +256,15 @@ Grammar (strict CRLF; a bare LF is an error):
 - `decode_request(xs) -> Maybe<&2, ParsedRequest>`: a reader for what E emits
   (request line, field lines, CRLF; the body is every byte after the blank line).
 
-### dns.bend (exists)
+### dns.bend
 
-`Dns.lookup(host: String) -> IO(Result<&1, &1, U32 & String, List<&2, String>>)`.
-A canonical dotted quad answers itself; any other host the resolver would read
-as an IPv4 address (getaddrinfo with AI_NUMERICHOST succeeds: inet_aton's octal,
-hex, short and bare-number forms) fails with EINVAL before any lookup. No timeout
-of its own (the caller races it, see `C.resolve`).
+Imports `../../dns/main.bend`, using only its public API. `Dns.lookup` uses
+system DNS configuration; `Dns.lookup_with` accepts an optional DNS config.
+The adapter calls `Dns.lookup_ipv4`, keeping hosts-file lookup, search domains,
+TCP queries, retries and CNAME following in the DNS package. Empty/NUL names
+and ambiguous numeric hosts fail before DNS; literals answer themselves.
+Timeout maps to HTTP Timeout, NoData to NoAddress, other errors to Dns with
+an errno when present (0 otherwise) and the full DNS error message.
 
 ### tls.bend
 
@@ -316,16 +318,17 @@ Errors: certificate/hostname failures use a distinct code (EPROTO) and say why
   `tls_error` (ETIMEDOUT to Timeout, refusals to Connect, else Tls).
 - `X.within(A, ms, act) -> IO(Maybe<&1, A>)`: IO.within whose timer stops once
   the action wins (0: no limit); cannot cancel the action.
-- `type Config is Data: Config{hosts: List<&2, M.Header>, timeout_ms: Nat, max_bytes: Nat}`
+- `type Config is Data: Config{hosts: List<&2, M.Header>, timeout_ms: Nat, max_bytes: Nat, dns: Maybe<&2, D.Dns.Config()>}`
   where each hosts entry maps a name (Header.name) to an IPv4 address (Header.value).
-  `default_config()`: no hosts, 30000 ms, 16 MiB (16777216).
+  `default_config()`: no hosts, 30000 ms, 16 MiB (16777216), system DNS.
+  `with_dns` attaches a DNS config; every setter preserves the other fields.
 - `C.resolve(cfg, host) -> IO(Result<&2, &2, M.Error, String>)`: an IPv4 literal
   (`U.is_ipv4`) is itself; else a host that `U.ends_in_number` fails with
   `BadUrl{"ambiguous IPv4 address"}`; else the hosts table (case-insensitive;
-  an entry that is not `U.is_ipv4` fails with `BadRequest`); else `Dns.lookup`'s
+  an entry that is not `U.is_ipv4` fails with `BadRequest`); else the native DNS resolver's
   first address, raced against `timeout_ms` with `X.within` (Timeout). The late
-  lookup is not cancelled (C: its helper thread runs on; JS: getaddrinfo blocks
-  the event loop, so the race cannot fire).
+  lookup is not cancelled: stalled DNS TCP steps run on, but the deadline
+  fires on both runtimes. DNS config per-step timeouts are independent.
 - `C.send(cfg, req) -> IO(Result<&2, &2, M.Error, M.Response>)`: `E.request`, resolve,
   plain or tls by scheme, keep the response.
 - `C.fetch(cfg, url: String)`: GET with no headers.
@@ -343,7 +346,7 @@ constructors (`Http.get(url)`, `Http.request(method, url, headers, body)`,
 `Http.header(name, value)`, method values), accessors (`Http.status`,
 `Http.headers`, `Http.body`, `Http.reason`, `Http.Url.*`), `Http.Url.parse/show`,
 `Http.encode`, `Http.decode`, `Http.get_header`, `Http.text`, `Http.is_success`,
-`Http.redirect`, `Http.default_config`, `Http.with_host`/`with_timeout`/`with_max_bytes`,
+`Http.redirect`, `Http.default_config`, `Http.with_host`/`with_timeout`/`with_max_bytes`/`with_dns`,
 `Http.send`, `Http.fetch`, `Http.lookup`, `Http.resolve`, `Http.Error.show`,
 `Http.ParseError.show`.
 

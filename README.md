@@ -1,4 +1,4 @@
-# bend2
+# bender-http
 
 Bend 2 HTTP and HTTPS client library.
 
@@ -34,6 +34,69 @@ def main() -> IO(Unit):
 - Header names must be tokens; header values printable ASCII, space and tab,
   with no space or tab at either end (not trimmed), else BadRequest.
 
+## DNS dependency
+
+Keep the two packages in sibling directories named `http` and `dns`:
+
+```bash
+git clone https://github.com/RevCBH/bender-dns.git dns
+git clone https://github.com/RevCBH/bender-http.git http
+git -C dns checkout 6e69e403218ee5af53b38d65bb5acf94cc44f248
+```
+
+HTTP imports `../dns/main.bend` and uses `Dns.lookup_ipv4`, the native
+DNS-over-TCP resolver. It loads `/etc/resolv.conf` and `/etc/hosts` lazily,
+including search domains, retries and CNAME following. HTTP's `with_host`
+overrides and literal addresses take precedence. For custom nameservers,
+ports, DNS timeouts or hosts/search settings, pass a DNS config:
+
+```bend
+import ../dns/main.bend as D
+import ./main.bend as P
+
+def config() -> P.Http.Config():
+  dns = D.Dns.with_servers(D.Dns.default_config(), ["1.1.1.1"])
+  P.Http.with_dns(P.Http.default_config(), dns)
+```
+
+DNS timeouts map to `Http.Timeout`; a name without A records maps to
+`Http.NoAddress`; other DNS failures map to `Http.Dns` with the DNS package's
+message. The error code is the underlying errno when available, otherwise 0.
+Native resolution does not implement nsswitch, mDNS or OS split DNS policy.
+
+## Command line
+
+Build the small curl-like CLI with Bend 2.0.32 and clang:
+
+```bash
+cd http
+make
+./bender-http https://example.com/                 # body to stdout
+./bender-http -L -o page.html https://example.com/ # follow redirects, save
+./bender-http -I https://example.com/              # HEAD with headers
+./bender-http -i -H 'Accept: text/plain' http://example.com/
+./bender-http -d hello -H 'Content-Type: text/plain' https://example.com/
+./bender-http --dns-server 1.1.1.1 --timeout 2000 https://example.com/
+./bender-http --help
+```
+
+`-X` selects a method, `-H` repeats request headers, `-d` sends UTF-8 text
+(defaulting to POST), `-i` includes response headers, `-L` follows at most
+10 redirects, and `-f` fails for HTTP status >= 400 without writing output.
+`-o FILE` saves byte-exact output (including binary); `-o -` selects stdout.
+`--max N` sets the response byte budget (default 16 MiB), `--timeout MS`
+sets the whole DNS lookup and each network step's timeout (default 30000;
+0 disables), and `--dns-port N` selects the DNS TCP port. Success exits 0,
+argument/network/output errors exit 1. Base's explicit successful exit prints
+a blank line to stderr. Stdout uses `/dev/stdout` on Linux/macOS.
+
+Run from source with `bend cli.bend -- URL`. Install with
+`make install PREFIX="$HOME/.local"`; the binary needs no Bend runtime.
+`make test` runs the CLI and resolver integration tests on both runtimes
+against local DNS, HTTP and HTTPS servers, without internet access.
+`make test-offline` checks argument handling, binary/header output, and
+system hosts/literals on both runtimes without creating sockets.
+
 ## Timeouts
 
 `Http.with_timeout(cfg, ms)` (default 30 s, 0: no limit) bounds each blocking
@@ -41,10 +104,11 @@ step: the name lookup, the TCP connect, the send, each read, and for HTTPS
 each step inside OpenSSL. HTTPS timeouts cancel the step. The others cannot
 be cancelled (Base has no way to abort a blocked effect): the request answers
 Timeout at once, but a stalled plain-HTTP connect or read keeps its socket
-open, and a stalled lookup its resolver thread, and that keeps the program
-from ending normally until the peer acts or the OS gives up. An explicit exit
-(`IO.die`) still ends it at once. On the JS lane the name lookup blocks the
-event loop, so its timeout cannot fire there.
+open, and a stalled DNS TCP step can also keep the program from ending
+normally until the peer acts or the OS gives up. An explicit exit (`IO.die`)
+still ends it at once. DNS deadlines work on both runtimes. The DNS config
+also has independent per-step deadlines; `Http.with_timeout(cfg, 0n)` disables
+only HTTP's deadline, while DNS keeps its configured timeouts.
 
 ## Lanes
 
@@ -90,7 +154,7 @@ end). See "Proof status" in `docs/DESIGN.md`.
 - **Timeouts** cannot cancel a stalled plain-HTTP connect or read, or a
   stalled DNS lookup (see Timeouts). HTTPS steps are cancelled.
 - **JS lane.** About 5x slower than the C lane; a stack limit for non-tail
-  recursion in caller code (see Lanes); the DNS lookup blocks the event loop.
+  recursion in caller code (see Lanes).
   Three stress tests (`decode_big_run`, `encode_big_run`, `url_long_run`) run
   on the C lane only.
 - **TLS.** Needs OpenSSL 3 at run time (`libssl.so.3` / `libcrypto.so.3`,
@@ -102,8 +166,7 @@ end). See "Proof status" in `docs/DESIGN.md`.
   foreign or IO code and are tested, not proven.
 - **Platforms.** Built and tested on Linux x86_64 (Arch locally, Ubuntu 24.04 in
   CI) with Bend 2.0.32. The macOS paths in `tls.c` / `tls.js`
-  are written but untested. The C side of the foreign effects (`dns.c`,
-  `tls.c`) uses Bend runtime internals with no ABI promise: rebuild and rerun
+  are written but untested. The C side of the foreign effect (`tls.c`) uses Bend runtime internals with no ABI promise: rebuild and rerun
   the tests after any compiler update.
 
 ## License

@@ -7,6 +7,7 @@ import ./utf8.bend as T
 import ./url.bend as U
 import ./encode.bend as E
 import ./dns.bend as Dns
+import ../../dns/main.bend as D
 import ./transport.bend as X
 
 # The client: settings, name resolution, one request/response exchange, and
@@ -14,7 +15,7 @@ import ./transport.bend as X
 # error texts). It follows no redirect by itself: `redirect` computes the
 # next request and the caller decides whether to send it.
 #
-# This file imports foreign code (dns.bend, transport.bend), so nothing a law
+# This file imports foreign code (transport.bend), so nothing a law
 # imports may import it.
 
 # Settings
@@ -29,27 +30,33 @@ import ./transport.bend as X
 # status line, headers and body, all counted (bytes after the message are
 # not counted; the reader stops once the message is complete).
 type Config is Data:
-  Config{hosts: List<&2, M.Header>, timeout_ms: Nat, max_bytes: Nat}
+  Config{hosts: List<&2, M.Header>, timeout_ms: Nat, max_bytes: Nat, dns: Maybe<&2, D.Dns.Config()>}
 
 # No hosts entries, 30 s per step, 16 MiB.
 def default_config() -> Config:
-  Config{Nil{}, 30000n, 16777216n}
+  Config{Nil{}, 30000n, 16777216n, None{}}
 
 # The config with `name` mapped to `ip`, ahead of any earlier entry for it.
 def with_host(cfg: Config, name: String, ip: String) -> Config:
   match cfg:
-    case Config{hs, t, m}:
-      Config{M.Header{name, ip} <> hs, t, m}
+    case Config{hs, t, m, dns}:
+      Config{M.Header{name, ip} <> hs, t, m, dns}
 
 def with_timeout(cfg: Config, ms: Nat) -> Config:
   match cfg:
-    case Config{hs, t, m}:
-      Config{hs, ms, m}
+    case Config{hs, t, m, dns}:
+      Config{hs, ms, m, dns}
 
 def with_max_bytes(cfg: Config, n: Nat) -> Config:
   match cfg:
-    case Config{hs, t, m}:
-      Config{hs, t, n}
+    case Config{hs, t, m, dns}:
+      Config{hs, t, n, dns}
+
+# Use a DNS package config instead of loading system files on each lookup.
+def with_dns(cfg: Config, resolver: D.Dns.Config()) -> Config:
+  match cfg:
+    case Config{hs, t, m, dns}:
+      Config{hs, t, m, Some{resolver}}
 
 # Methods
 # -------
@@ -156,17 +163,9 @@ def error_show(e: M.Error) -> String:
 # Resolving a host
 # ----------------
 
-def looked_up(r: Result<&1, &1, U32 & String, List<&2, String>>) -> Result<&2, &2, M.Error, List<&2, String>>:
-  match r:
-    case Fail{(code, message)}:
-      Fail{M.Dns{code, message}}
-    case Done{ips}:
-      Done{ips}
-
-# The host's IPv4 addresses from the OS resolver (Dns.lookup).
+# Native DNS with system configuration and the DNS package's step timeouts.
 def lookup(host: String) -> IO(Result<&2, &2, M.Error, List<&2, String>>):
-  IO.bind(Result<&1, &1, U32 & String, List<&2, String>>, Result<&2, &2, M.Error, List<&2, String>>,
-    Dns.Dns.lookup(host), r => IO.pure(Result<&2, &2, M.Error, List<&2, String>>, looked_up(r)))
+  Dns.Dns.lookup(host)
 
 def first_address(host: String, r: Result<&2, &2, M.Error, List<&2, String>>) -> Result<&2, &2, M.Error, String>:
   match r:
@@ -187,15 +186,11 @@ def timed_out(r: Maybe<&1, Result<&2, &2, M.Error, List<&2, String>>>) -> Result
     case Some{x}:
       x
 
-# The first address of `host` from Dns.lookup, within `ms` (0: no limit).
-# As with every timeout over Base (see transport.bend's `within`), a lookup
-# past its deadline is not cancelled: on the C lane getaddrinfo keeps its
-# helper thread until the resolver gives up, and the program cannot end
-# normally before that; on the JS lane getaddrinfo blocks the event loop, so
-# the deadline cannot interrupt it (bendlang/bend#1148).
-def lookup_within(+host: String, ms: Nat) -> IO(Result<&2, &2, M.Error, String>):
+# Bound the entire native lookup, including configuration, search and retries.
+# Base cannot cancel a stalled DNS TCP step, on either runtime.
+def lookup_within(dns: Maybe<&2, D.Dns.Config()>, +host: String, ms: Nat) -> IO(Result<&2, &2, M.Error, String>):
   IO.bind(Maybe<&1, Result<&2, &2, M.Error, List<&2, String>>>, Result<&2, &2, M.Error, String>,
-    X.within(Result<&2, &2, M.Error, List<&2, String>>, ms, lookup(host)),
+    X.within(Result<&2, &2, M.Error, List<&2, String>>, ms, Dns.Dns.lookup_with(dns, host)),
     r => IO.pure(Result<&2, &2, M.Error, String>, first_address(host, timed_out(r))))
 
 # A hosts-table entry: used only when it is a dotted-quad IPv4 address.
@@ -207,28 +202,28 @@ def resolve.entry(ok: Bool, ip: String, host: String) -> IO(Result<&2, &2, M.Err
       IO.pure(Result<&2, &2, M.Error, String>,
         Fail{M.BadRequest{"hosts entry for " ++ host ++ " is not an IPv4 address: " ++ ip}})
 
-def resolve.table(found: Maybe<&2, String>, +host: String, ms: Nat) -> IO(Result<&2, &2, M.Error, String>):
+def resolve.table(dns: Maybe<&2, D.Dns.Config()>, found: Maybe<&2, String>, +host: String, ms: Nat) -> IO(Result<&2, &2, M.Error, String>):
   match found:
     case Some{+ip}:
       resolve.entry(U.is_ipv4(ip), ip, host)
     case None{}:
-      lookup_within(host, ms)
+      lookup_within(dns, host, ms)
 
-def resolve.numeric(num: Bool, +host: String, hosts: List<&2, M.Header>, ms: Nat) ->
+def resolve.numeric(dns: Maybe<&2, D.Dns.Config()>, num: Bool, +host: String, hosts: List<&2, M.Header>, ms: Nat) ->
   IO(Result<&2, &2, M.Error, String>):
   match num:
     case True{}:
       IO.pure(Result<&2, &2, M.Error, String>, Fail{M.BadUrl{"ambiguous IPv4 address"}})
     case False{}:
-      resolve.table(H.get(host, hosts), host, ms)
+      resolve.table(dns, H.get(host, hosts), host, ms)
 
-def resolve.literal(literal: Bool, +host: String, hosts: List<&2, M.Header>, ms: Nat) ->
+def resolve.literal(dns: Maybe<&2, D.Dns.Config()>, literal: Bool, +host: String, hosts: List<&2, M.Header>, ms: Nat) ->
   IO(Result<&2, &2, M.Error, String>):
   match literal:
     case True{}:
       IO.pure(Result<&2, &2, M.Error, String>, Done{host})
     case False{}:
-      resolve.numeric(U.ends_in_number(H.lower(host)), host, hosts, ms)
+      resolve.numeric(dns, U.ends_in_number(H.lower(host)), host, hosts, ms)
 
 # The IPv4 address to connect to for `host`:
 # - a dotted-quad IPv4 literal (U.is_ipv4) is itself;
@@ -238,12 +233,12 @@ def resolve.literal(literal: Bool, +host: String, hosts: List<&2, M.Header>, ms:
 #   before the hosts table or any lookup (U.parse refuses these hosts too);
 # - else the config's hosts table (case-insensitive; an entry that is not a
 #   dotted quad fails with BadRequest);
-# - else the first address Dns.lookup gives (NoAddress if it gives none),
+# - else the first address the DNS package gives (NoAddress if it gives none),
 #   within the config's timeout_ms (Timeout).
 def resolve(cfg: Config, +host: String) -> IO(Result<&2, &2, M.Error, String>):
   match cfg:
-    case Config{hosts, t, m}:
-      resolve.literal(U.is_ipv4(host), host, hosts, t)
+    case Config{hosts, t, m, dns}:
+      resolve.literal(dns, U.is_ipv4(host), host, hosts, t)
 
 # Sending
 # -------
@@ -282,11 +277,11 @@ def encoded(r: Result<&2, &2, M.Error, List<&2, U32>>, cfg: Config, req: M.Reque
       IO.pure(Result<&2, &2, M.Error, M.Response>, Fail{e})
     case Done{bytes}:
       match cfg req:
-        case Config{hosts, +ms, +max} M.Request{m, u, hs, body}:
+        case Config{hosts, +ms, +max, dns} M.Request{m, u, hs, body}:
           match u:
             case M.Url{s, +h, p, t}:
               IO.bind(Result<&2, &2, M.Error, String>, Result<&2, &2, M.Error, M.Response>,
-                resolve(Config{hosts, ms, max}, h),
+                resolve(Config{hosts, ms, max, dns}, h),
                 ip => resolved(ip, s, h, p, bytes, m, max, ms))
 
 # One exchange: encode the request (refusing an invalid one with

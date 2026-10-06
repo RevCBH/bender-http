@@ -15,7 +15,7 @@ pass() { printf 'ok    %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; failures+=("$1"); printf '%s\n' "$2" | tail -n 30 | sed 's/^/      /'; }
 
 # A file passes the check if it is pure and checks, or if the only complaint is
-# its reliance on the foreign effects (dns, tls), which is expected.
+# its reliance on the foreign effects (OS resolver API, TLS), which is expected.
 check_file() {
   local f=$1 log
   log="$(bend "$f" --check-only 2>&1)"
@@ -45,7 +45,7 @@ log="$(bend PROOF.bend --verdict 2>&1)"
 grep -q 'ALL PROOFS CHECK' <<<"$log" && pass 'bend PROOF.bend --verdict' || fail 'bend PROOF.bend --verdict' "$log"
 
 echo '== check every file'
-for f in main.bend src/*.bend examples/*.bend; do check_file "$f"; done
+for f in main.bend cli.bend src/*.bend examples/*.bend tests/resolver_local.bend tests/cli_output.bend; do check_file "$f"; done
 
 echo '== checker-evaluated tests'
 for f in tests/*_test.bend; do
@@ -62,12 +62,12 @@ for f in tests/*_run.bend; do
 done
 
 echo '== live tests (local servers)'
-for s in tests/tls_live.sh tests/transport_live.sh; do
+for s in tests/tls_live.sh tests/transport_live.sh tests/cli_offline.sh tests/cli_test.sh; do
   log="$(bash "$s" 2>&1)" && pass "$s" || fail "$s" "$log"
 done
 if (( public )); then
   echo '== live tests (public endpoints)'
-  for s in tests/client_live.sh tests/client_dns_timeout.sh; do
+  for s in tests/client_live.sh; do
     log="$(bash "$s" 2>&1)" && pass "$s" || fail "$s" "$log"
   done
   run_js tests/tls_public.bend
