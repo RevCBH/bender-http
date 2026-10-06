@@ -12,7 +12,7 @@ TOOLS="${TOOLS:-$HOME/.cache/bend-toolchain}"
 mkdir -p "$TOOLS"
 fetch() { # url sha dest
   [[ -f $3 ]] && printf '%s  %s\n' "$2" "$3" | sha256sum -c --quiet - && return
-  curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$3.part" "$1"
+  curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 600 --retry 3 --retry-all-errors -o "$3.part" "$1"
   printf '%s  %s\n' "$2" "$3.part" | sha256sum -c --quiet -
   mv "$3.part" "$3"
 }
